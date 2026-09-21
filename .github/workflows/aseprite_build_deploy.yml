@@ -343,7 +343,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           & .\aseprite.exe --version
-          if ($LASTEXITCODE -ne 0) {
+          if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
             throw "Aseprite startup check failed with exit code $LASTEXITCODE"
           }
 

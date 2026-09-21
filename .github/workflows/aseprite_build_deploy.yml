@@ -117,8 +117,10 @@ jobs:
             ninja-build \
             p7zip-full \
             unzip \
+            libx11-dev \
             libxcursor-dev \
             libxi-dev \
+            libxrandr-dev \
             libgl1-mesa-dev \
             libfontconfig1-dev
 

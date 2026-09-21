@@ -2,8 +2,10 @@ name: Build and deploy Aseprite
 
 on:
   workflow_dispatch:
+
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 0 * * *"
+
   push:
     branches:
       - master
@@ -16,29 +18,47 @@ jobs:
   check-version:
     name: Check latest Aseprite release
     runs-on: ubuntu-latest
+
     outputs:
       download_url: ${{ steps.version_info.outputs.download_url }}
       latest_tag: ${{ steps.version_info.outputs.latest_tag }}
       should_build: ${{ steps.should_build.outputs.should_build }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
+
     steps:
       - name: Get latest version info
         id: version_info
         shell: bash
         run: |
           set -euo pipefail
-          data=$(curl --fail --silent --show-error --location https://api.github.com/repos/aseprite/aseprite/releases/latest)
-          LATEST_TAG=$(jq -r '.tag_name' <<< "$data")
-          DOWNLOAD_URL=$(jq -r '.assets[] | select(.name | test("source\\.zip$"; "i")) | .browser_download_url' <<< "$data")
-          VERSION_INFO=$(jq -r '.body' <<< "$data")
-          test -n "$LATEST_TAG"
-          test -n "$DOWNLOAD_URL"
-          echo "$LATEST_TAG" > "${LATEST_TAG}.txt"
-          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
+
+          data="$(curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            https://api.github.com/repos/aseprite/aseprite/releases/latest)"
+
+          latest_tag="$(jq -r '.tag_name' <<< "$data")"
+
+          download_url="$(jq -r '
+            .assets[]
+            | select(.name | test("source\\.zip$"; "i"))
+            | .browser_download_url
+          ' <<< "$data")"
+
+          version_info="$(jq -r '.body' <<< "$data")"
+
+          test -n "$latest_tag"
+          test -n "$download_url"
+
+          echo "$latest_tag" > "${latest_tag}.txt"
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "download_url=$download_url" >> "$GITHUB_OUTPUT"
+
           {
             echo "version_info<<EOF"
-            echo "$VERSION_INFO"
+            echo "$version_info"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -51,12 +71,17 @@ jobs:
 
       - name: Should we start new build?
         id: should_build
-        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/fix' || steps.version_check.outputs.cache-hit != 'true'
-        run: echo "should_build=true" >> "$GITHUB_OUTPUT"
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          github.ref == 'refs/heads/fix' ||
+          steps.version_check.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         id: create_release
-        if: steps.should_build.outputs.should_build
+        if: steps.should_build.outputs.should_build == 'true'
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -71,8 +96,9 @@ jobs:
   build-aseprite:
     name: Build Aseprite (${{ matrix.os }})
     needs: check-version
-    if: ${{ needs.check-version.outputs.should_build }}
+    if: needs.check-version.outputs.should_build == 'true'
     runs-on: ${{ matrix.os }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -81,20 +107,37 @@ jobs:
           - ubuntu-latest
 
     steps:
-      - name: (Windows) Install dependencies
+      - name: (Windows) Install Ninja
         if: matrix.os == 'windows-latest'
-        uses: seanmiddleditch/gha-setup-ninja@v3
+        uses: seanmidditch/gha-setup-ninja@v3
 
       - name: (Windows) Remove OpenSSL from PATH
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: Remove-Item -Recurse -Force 'C:\Program Files\OpenSSL\' -ErrorAction SilentlyContinue
+        run: |
+          Remove-Item `
+            -Recurse `
+            -Force `
+            "C:\Program Files\OpenSSL\" `
+            -ErrorAction SilentlyContinue
 
       - name: (Ubuntu) Install dependencies
         if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
+          set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build unzip p7zip-full libxcursor-dev libxi-dev libgl1-mesa-dev libfontconfig-dev
+
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            unzip \
+            p7zip-full \
+            libxcursor-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            libfontconfig-dev
 
       - name: Get Skia from cache
         id: skia-cache
@@ -104,50 +147,176 @@ jobs:
           key: skia-${{ matrix.os }}-cache
 
       - name: Download Skia if not in cache (Ubuntu)
-        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'ubuntu-latest'
+        if: >-
+          steps.skia-cache.outputs.cache-hit != 'true' &&
+          matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location -o Skia-Linux-Release-X64.zip https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Linux-Release-x64.zip
+
+          curl \
+            --fail \
+            --location \
+            --output Skia-Linux-Release-X64.zip \
+            https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Linux-Release-x64.zip
+
+          rm -rf skia
           mkdir -p skia
-          unzip -q Skia-Linux-Release-X64.zip -d skia
+
+          unzip -q \
+            Skia-Linux-Release-X64.zip \
+            -d skia
+
+          test -d skia/out/Release-x64
 
       - name: Download Skia if not in cache (Windows)
-        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'windows-latest'
+        if: >-
+          steps.skia-cache.outputs.cache-hit != 'true' &&
+          matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $zip = 'Skia-Windows-Release-X64.zip'
-          Invoke-WebRequest -Uri 'https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip' -OutFile $zip
-          New-Item -ItemType Directory -Path skia -Force | Out-Null
-          Expand-Archive -Path $zip -DestinationPath skia -Force
+          $zip = Join-Path $env:GITHUB_WORKSPACE "Skia-Windows-Release-X64.zip"
+          $skiaDir = Join-Path $env:GITHUB_WORKSPACE "skia"
+
+          Invoke-WebRequest `
+            -Uri "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip" `
+            -OutFile $zip
+
+          if (Test-Path $skiaDir) {
+            Remove-Item $skiaDir -Recurse -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $skiaDir `
+            -Force | Out-Null
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $skiaDir `
+            -Force
+
+          $skiaLibraryDir = Join-Path $skiaDir "out\Release-x64"
+
+          if (-not (Test-Path $skiaLibraryDir)) {
+            throw "Skia library directory was not found: $skiaLibraryDir"
+          }
 
       - name: Download Aseprite release (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location -o Aseprite-source.zip '${{ needs.check-version.outputs.download_url }}'
+
+          curl \
+            --fail \
+            --location \
+            --output Aseprite-source.zip \
+            '${{ needs.check-version.outputs.download_url }}'
+
           rm -rf aseprite
-          unzip -q Aseprite-source.zip -d .
+
+          temporary_dir="$(mktemp -d)"
+
+          unzip -q \
+            Aseprite-source.zip \
+            -d "$temporary_dir"
+
+          source_dir="$(
+            find "$temporary_dir" \
+              -type f \
+              -name CMakeLists.txt \
+              -printf "%h\n" \
+              | head -n 1
+          )"
+
+          test -n "$source_dir"
+          test -f "$source_dir/CMakeLists.txt"
+
+          mkdir -p aseprite
+
+          cp -a "$source_dir"/. aseprite/
+
           mkdir -p aseprite/build
+
+          test -f aseprite/CMakeLists.txt
+
+          rm -rf "$temporary_dir"
 
       - name: Download Aseprite release (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $zip = Join-Path $env:GITHUB_WORKSPACE 'Aseprite-source.zip'
-          $sourceDir = Join-Path $env:GITHUB_WORKSPACE 'aseprite'
-          Invoke-WebRequest -Uri '${{ needs.check-version.outputs.download_url }}' -OutFile $zip
-          if (Test-Path $sourceDir) { Remove-Item $sourceDir -Recurse -Force }
-          Expand-Archive -Path $zip -DestinationPath $env:GITHUB_WORKSPACE -Force
-          New-Item -ItemType Directory -Path (Join-Path $sourceDir 'build') -Force | Out-Null
+          $zip = Join-Path $env:GITHUB_WORKSPACE "Aseprite-source.zip"
+          $temporaryDir = Join-Path $env:RUNNER_TEMP "aseprite-source"
+          $sourceDir = Join-Path $env:GITHUB_WORKSPACE "aseprite"
+
+          Invoke-WebRequest `
+            -Uri '${{ needs.check-version.outputs.download_url }}' `
+            -OutFile $zip
+
+          if (Test-Path $temporaryDir) {
+            Remove-Item $temporaryDir -Recurse -Force
+          }
+
+          if (Test-Path $sourceDir) {
+            Remove-Item $sourceDir -Recurse -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $temporaryDir `
+            -Force | Out-Null
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $temporaryDir `
+            -Force
+
+          $cmakeFile = Get-ChildItem `
+            -Path $temporaryDir `
+            -Recurse `
+            -File `
+            -Filter "CMakeLists.txt" |
+            Select-Object -First 1
+
+          if ($null -eq $cmakeFile) {
+            throw "CMakeLists.txt was not found in the Aseprite source archive"
+          }
+
+          $extractedSourceDir = $cmakeFile.Directory.FullName
+
+          if (-not (Test-Path (Join-Path $extractedSourceDir "CMakeLists.txt"))) {
+            throw "Invalid Aseprite source directory: $extractedSourceDir"
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $sourceDir `
+            -Force | Out-Null
+
+          Copy-Item `
+            -Path (Join-Path $extractedSourceDir "*") `
+            -Destination $sourceDir `
+            -Recurse `
+            -Force
+
+          New-Item `
+            -ItemType Directory `
+            -Path (Join-Path $sourceDir "build") `
+            -Force | Out-Null
+
+          if (-not (Test-Path (Join-Path $sourceDir "CMakeLists.txt"))) {
+            throw "CMakeLists.txt was not copied to $sourceDir"
+          }
 
       - name: (Windows) Set architecture for the produced binary
         if: matrix.os == 'windows-latest'
         shell: cmd
-        run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
 
-      - name: (Windows) Set Visual Studio build environment variables and paths
+      - name: (Windows) Set Visual Studio build environment
         if: matrix.os == 'windows-latest'
         uses: seanmiddleditch/gha-setup-vsdevenv@v4
 
@@ -156,33 +325,65 @@ jobs:
         working-directory: aseprite/build
         shell: pwsh
         run: |
-          cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} '-DCMAKE_IGNORE_PATH=C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/' -DLAF_BACKEND=skia -DSKIA_DIR="$(Convert-Path ../../skia)" -DSKIA_LIBRARY_DIR="$(Convert-Path ../../skia/out/Release-x64)" -G Ninja ..
+          $skiaDir = Convert-Path "../../skia"
+          $skiaLibraryDir = Convert-Path "../../skia/out/Release-x64"
+
+          cmake `
+            "-DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}" `
+            "-DCMAKE_IGNORE_PATH=C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/" `
+            "-DLAF_BACKEND=skia" `
+            "-DSKIA_DIR=$skiaDir" `
+            "-DSKIA_LIBRARY_DIR=$skiaLibraryDir" `
+            -G Ninja `
+            ..
 
       - name: (Ubuntu) Run CMake
         if: matrix.os == 'ubuntu-latest'
         working-directory: aseprite/build
+        shell: bash
         run: |
-          cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR="$(realpath ../../skia)" -DSKIA_LIBRARY_DIR="$(realpath ../../skia/out/Release-x64)" -G Ninja ..
+          set -euo pipefail
+
+          cmake \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR="$(realpath ../../skia)" \
+            -DSKIA_LIBRARY_DIR="$(realpath ../../skia/out/Release-x64)" \
+            -G Ninja \
+            ..
 
       - name: Run Ninja
         working-directory: aseprite/build
         shell: bash
-        run: ninja aseprite
+        run: |
+          set -euo pipefail
+          ninja aseprite
 
       - name: Clean up build
         working-directory: aseprite/build/bin
         shell: bash
-        run: rm -f gen modp_b64_gen gen.exe gen.exe.manifest modp_b64_gen.exe modp_b64_gen.exe.manifest
+        run: |
+          rm -f \
+            gen \
+            modp_b64_gen \
+            gen.exe \
+            gen.exe.manifest \
+            modp_b64_gen.exe \
+            modp_b64_gen.exe.manifest
 
       - name: Make portable
         working-directory: aseprite/build/bin
         shell: bash
-        run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
+        run: |
+          echo "# This file is here so Aseprite behaves as a portable program" > aseprite.ini
 
-      - name: Create release
+      - name: Create release archive
         working-directory: aseprite/build/bin
         shell: bash
-        run: 7z -tzip a "Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip" *
+        run: |
+          7z -tzip a \
+            "Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip" \
+            *
 
       - name: Upload release
         uses: actions/upload-release-asset@v1

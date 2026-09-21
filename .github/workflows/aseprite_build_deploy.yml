@@ -130,6 +130,21 @@ jobs:
         with:
           arch: x64
 
+      - name: Prevent dynamic linkage to runner OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          @(
+            "C:\Program Files\OpenSSL",
+            "C:\Program Files\OpenSSL-Win64"
+          ) | ForEach-Object {
+            if (Test-Path $_) {
+              Remove-Item $_ -Recurse -Force
+            }
+          }
+
       - name: Cache Skia
         id: skia-cache
         uses: actions/cache@v4
@@ -319,6 +334,17 @@ jobs:
           ninja aseprite
           if ($LASTEXITCODE -ne 0) {
             throw "Ninja failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify Windows executable starts
+        if: runner.os == 'Windows'
+        working-directory: aseprite/build/bin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & .\aseprite.exe --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Aseprite startup check failed with exit code $LASTEXITCODE"
           }
 
       - name: Prepare archive (Ubuntu)

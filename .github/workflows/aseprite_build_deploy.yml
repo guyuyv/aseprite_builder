@@ -107,10 +107,6 @@ jobs:
           - ubuntu-latest
 
     steps:
-      - name: (Windows) Install Ninja
-        if: matrix.os == 'windows-latest'
-        uses: seanmidditch/gha-setup-ninja@v3
-
       - name: (Windows) Remove OpenSSL from PATH
         if: matrix.os == 'windows-latest'
         shell: pwsh
